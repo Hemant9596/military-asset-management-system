@@ -1,5 +1,4 @@
 # Military Asset Management System
-
 React/Vite client -> Spring Boot REST API -> MySQL. The backend uses Spring Security, JWT, Spring Data JPA, and Flyway; the frontend uses React Router and Axios.
 
 ## Requirements
