@@ -55,12 +55,19 @@ public class DashboardService {
         if (from != null && to != null && from.isAfter(to)) {
             throw new BusinessException("Start date must be on or before end date");
         }
-        List<Purchase> purchases = purchaseRepository.findAll().stream()
+        List<Purchase> allPurchases = purchaseRepository.findAll();
+        List<Transfer> allTransfers = transferRepository.findAll();
+        List<Assignment> allAssignments = assignmentRepository.findAll();
+        List<Expenditure> allExpenditures = expenditureRepository.findAll();
+        List<Inventory> allInventory = inventoryRepository.findAll();
+        List<OpeningBalance> allOpeningBalances = openingBalanceRepository.findAll();
+
+        List<Purchase> purchases = allPurchases.stream()
                 .filter(p -> matchesBaseAndType(p.getBase(), p.getAsset().getEquipmentType(), baseId, equipmentTypeId))
                 .filter(p -> matchesDate(p.getPurchaseDate(), from, to))
                 .toList();
 
-        List<Transfer> transfers = transferRepository.findAll().stream()
+        List<Transfer> transfers = allTransfers.stream()
                 .filter(t -> matchesBaseAndType(t.getSourceBase(), t.getAsset().getEquipmentType(), baseId,
                         equipmentTypeId)
                         || matchesBaseAndType(t.getDestinationBase(), t.getAsset().getEquipmentType(), baseId,
@@ -68,12 +75,12 @@ public class DashboardService {
                 .filter(t -> matchesDate(t.getTransferDate(), from, to))
                 .toList();
 
-        List<Assignment> assignments = assignmentRepository.findAll().stream()
+        List<Assignment> assignments = allAssignments.stream()
                 .filter(a -> matchesBaseAndType(a.getBase(), a.getAsset().getEquipmentType(), baseId, equipmentTypeId))
                 .filter(a -> matchesDate(a.getAssignmentDate(), from, to))
                 .toList();
 
-        List<Expenditure> expenditures = expenditureRepository.findAll().stream()
+        List<Expenditure> expenditures = allExpenditures.stream()
                 .filter(e -> matchesBaseAndType(e.getBase(), e.getAsset().getEquipmentType(), baseId, equipmentTypeId))
                 .filter(e -> matchesDate(e.getExpenditureDate(), from, to))
                 .toList();
@@ -89,17 +96,17 @@ public class DashboardService {
                 .sum();
         int assignedTotal = assignments.stream().mapToInt(Assignment::getQuantity).sum();
         int expendedTotal = expenditures.stream().mapToInt(Expenditure::getQuantity).sum();
-        int currentBalance = inventoryRepository.findAll().stream()
+        int currentBalance = allInventory.stream()
                 .filter(i -> matchesBase(i.getBase(), baseId))
                 .filter(i -> matchesEquipment(i.getAsset().getEquipmentType(), equipmentTypeId))
                 .mapToInt(Inventory::getTotalQuantity)
                 .sum();
         LocalDate periodStart = from == null ? LocalDate.MIN : from;
-        int movementSinceStart = purchaseRepository.findAll().stream()
+        int movementSinceStart = allPurchases.stream()
                 .filter(p -> matchesBaseAndType(p.getBase(), p.getAsset().getEquipmentType(), baseId, equipmentTypeId))
                 .filter(p -> !p.getPurchaseDate().isBefore(periodStart))
                 .mapToInt(Purchase::getQuantity).sum();
-        for (Transfer transfer : transferRepository.findAll()) {
+        for (Transfer transfer : allTransfers) {
             if (matchesEquipment(transfer.getAsset().getEquipmentType(), equipmentTypeId)
                     && !transfer.getTransferDate().isBefore(periodStart)) {
                 if (baseId == null || transfer.getDestinationBase().getId().equals(baseId)) {
@@ -110,12 +117,12 @@ public class DashboardService {
                 }
             }
         }
-        movementSinceStart -= expenditureRepository.findAll().stream()
+        movementSinceStart -= allExpenditures.stream()
                 .filter(e -> matchesBaseAndType(e.getBase(), e.getAsset().getEquipmentType(), baseId, equipmentTypeId))
                 .filter(e -> !e.getExpenditureDate().isBefore(periodStart))
                 .mapToInt(Expenditure::getQuantity).sum();
         LocalDate balanceDate = from == null ? LocalDate.MIN : from;
-        List<OpeningBalance> scopedOpeningBalances = openingBalanceRepository.findAll().stream()
+        List<OpeningBalance> scopedOpeningBalances = allOpeningBalances.stream()
                 .filter(b -> (baseId == null || b.getBase().getId().equals(baseId))
                         && (equipmentTypeId == null
                                 || b.getAsset().getEquipmentType().getId().equals(equipmentTypeId)))
@@ -130,9 +137,11 @@ public class DashboardService {
         int netMovement = openingBalanceMovement + purchaseTotal + transferIn - transferOut - expendedTotal;
         int closingBalance = openingBalance + netMovement;
 
-        List<Map<String, Object>> movementTrend = buildTrend(baseId, equipmentTypeId, from, to);
-        List<Map<String, Object>> inventoryByType = buildInventoryByType(baseId, equipmentTypeId);
-        List<Map<String, Object>> transfersByBase = buildTransfersByBase(baseId, equipmentTypeId, from, to);
+        List<Map<String, Object>> movementTrend = buildTrend(baseId, equipmentTypeId, from, to,
+                allPurchases, allTransfers, allExpenditures, allOpeningBalances);
+        List<Map<String, Object>> inventoryByType = buildInventoryByType(baseId, equipmentTypeId, allInventory);
+        List<Map<String, Object>> transfersByBase = buildTransfersByBase(baseId, equipmentTypeId, from, to,
+                allTransfers);
 
         return new DashboardSummary(openingBalance, purchaseTotal, transferIn, transferOut, netMovement,
                 assignedTotal, expendedTotal, closingBalance, movementTrend, inventoryByType, transfersByBase);
@@ -239,14 +248,16 @@ public class DashboardService {
         return !date.isBefore(from) && !date.isAfter(to);
     }
 
-    private List<Map<String, Object>> buildTrend(Long baseId, Long equipmentTypeId, LocalDate from, LocalDate to) {
+    private List<Map<String, Object>> buildTrend(Long baseId, Long equipmentTypeId, LocalDate from, LocalDate to,
+            List<Purchase> purchases, List<Transfer> transfers, List<Expenditure> expenditures,
+            List<OpeningBalance> openingBalances) {
         List<Map<String, Object>> results = new ArrayList<>();
         LocalDate start = from != null ? from : LocalDate.now().minusDays(30);
         LocalDate end = to != null ? to : LocalDate.now();
 
         for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(7)) {
             int value = 0;
-            for (Purchase purchase : purchaseRepository.findAll()) {
+            for (Purchase purchase : purchases) {
                 if (matchesBaseAndType(purchase.getBase(), purchase.getAsset().getEquipmentType(), baseId,
                         equipmentTypeId)
                         && !purchase.getPurchaseDate().isBefore(date)
@@ -254,7 +265,7 @@ public class DashboardService {
                     value += purchase.getQuantity();
                 }
             }
-            for (Transfer transfer : transferRepository.findAll()) {
+            for (Transfer transfer : transfers) {
                 if (matchesEquipment(transfer.getAsset().getEquipmentType(), equipmentTypeId)
                         && !transfer.getTransferDate().isBefore(date)
                         && transfer.getTransferDate().isBefore(date.plusDays(7))) {
@@ -266,7 +277,7 @@ public class DashboardService {
                     }
                 }
             }
-            for (Expenditure expenditure : expenditureRepository.findAll()) {
+            for (Expenditure expenditure : expenditures) {
                 if (matchesBaseAndType(expenditure.getBase(), expenditure.getAsset().getEquipmentType(), baseId,
                         equipmentTypeId)
                         && !expenditure.getExpenditureDate().isBefore(date)
@@ -274,7 +285,7 @@ public class DashboardService {
                     value -= expenditure.getQuantity();
                 }
             }
-            for (OpeningBalance openingBalance : openingBalanceRepository.findAll()) {
+            for (OpeningBalance openingBalance : openingBalances) {
                 if (matchesBaseAndType(openingBalance.getBase(), openingBalance.getAsset().getEquipmentType(), baseId,
                         equipmentTypeId)
                         && !openingBalance.getEffectiveDate().isBefore(date)
@@ -290,8 +301,9 @@ public class DashboardService {
         return results;
     }
 
-    private List<Map<String, Object>> buildInventoryByType(Long baseId, Long equipmentTypeId) {
-        return inventoryRepository.findAll().stream()
+    private List<Map<String, Object>> buildInventoryByType(Long baseId, Long equipmentTypeId,
+            List<Inventory> inventory) {
+        return inventory.stream()
                 .filter(i -> matchesBase(i.getBase(), baseId))
                 .filter(i -> matchesEquipment(i.getAsset().getEquipmentType(), equipmentTypeId))
                 .collect(Collectors.groupingBy(i -> i.getAsset().getEquipmentType().getName(),
@@ -307,9 +319,9 @@ public class DashboardService {
     }
 
     private List<Map<String, Object>> buildTransfersByBase(Long baseId, Long equipmentTypeId, LocalDate from,
-            LocalDate to) {
+            LocalDate to, List<Transfer> transfers) {
         Map<String, Integer> totals = new HashMap<>();
-        for (Transfer transfer : transferRepository.findAll()) {
+        for (Transfer transfer : transfers) {
             if (!matchesBaseAndType(transfer.getSourceBase(), transfer.getAsset().getEquipmentType(), baseId,
                     equipmentTypeId) &&
                     !matchesBaseAndType(transfer.getDestinationBase(), transfer.getAsset().getEquipmentType(), baseId,
